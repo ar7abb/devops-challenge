@@ -1,0 +1,53 @@
+#!/bin/bash
+set -euo pipefail
+
+useradd --create-home --shell /bin/bash appadmin
+
+printf '%s\n' 'appadmin ALL=(ALL) NOPASSWD:ALL' \
+  > /etc/sudoers.d/appadmin
+
+chmod 0440 /etc/sudoers.d/appadmin
+
+export DEBIAN_FRONTEND=noninteractive
+
+apt-get update
+apt-get install -y docker.io ca-certificates sudo ufw
+
+systemctl enable --now docker
+
+mkdir -p /opt/intern-task-app/app
+
+printf '%s' '${dockerfile_b64}' | base64 --decode \
+  > /opt/intern-task-app/Dockerfile
+
+printf '%s' '${app_b64}' | base64 --decode \
+  > /opt/intern-task-app/app/app.py
+
+docker build -t intern-task-app:local /opt/intern-task-app
+
+ufw default deny incoming
+ufw default allow outgoing
+ufw allow 5000/tcp
+ufw --force enable
+
+cat > /etc/systemd/system/intern-task-app.service <<'EOF'
+[Unit]
+Description=Intern task app container
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStartPre=-/usr/bin/docker rm -f intern-task-app
+ExecStart=/usr/bin/docker run --rm --name intern-task-app --network host intern-task-app:local
+ExecStop=/usr/bin/docker stop -t 10 intern-task-app
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now intern-task-app.service
